@@ -1,0 +1,25 @@
+{
+  "name": "agroflow-backup-service",
+  "version": "1.0.0",
+  "description": "AgroFlow Isolated Backup Node - Read-only mirror of the primary database. This service ONLY appends data and NEVER deletes or overwrites.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "mongoose": "^9.9.2",
+    "node-cron": "^4.6.0",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "tsx": "^4.23.12",
+    "@types/node": "^26.2.0",
+    "@types/node-cron": "^3.0.11"
+  }
+}
