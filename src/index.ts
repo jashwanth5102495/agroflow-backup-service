@@ -26,11 +26,12 @@ const startBackupService = async (): Promise<void> => {
   console.log(`  Interval : Every ${env.BACKUP_INTERVAL_HOURS} hours`);
   console.log('');
 
-  // Step 1: Connect to both databases
-  await connectDatabases();
-
-  // Step 2: Start the Express dashboard server (login + stats UI + health)
+  // Step 1: Start the Express dashboard server immediately (before DB connects)
+  // This way Railway sees the health endpoint and marks the service as Online
   startDashboardServer(getLastSyncTime, getSyncCount);
+
+  // Step 2: Connect to both databases (retries forever, never crashes)
+  await connectDatabases();
 
   // Step 3: Start the cron scheduler (also triggers first sync immediately)
   initScheduler(updateSyncStats);
