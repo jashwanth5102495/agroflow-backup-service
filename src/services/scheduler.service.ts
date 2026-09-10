@@ -1,6 +1,5 @@
 import { env } from '../config/env';
 import { runBackupJob } from '../services/backup.service';
-import { updateHealthStats } from '../services/health.service';
 import cron from 'node-cron';
 
 const buildCronExpression = (hours: number): string => {
@@ -12,7 +11,7 @@ const buildCronExpression = (hours: number): string => {
   return `0 */${hours} * * *`;
 };
 
-export const initScheduler = (): void => {
+export const initScheduler = (onSyncComplete: (time: string) => void): void => {
   const intervalHours = env.BACKUP_INTERVAL_HOURS;
   const cronExpr = buildCronExpression(intervalHours);
 
@@ -29,7 +28,7 @@ export const initScheduler = (): void => {
   cron.schedule(cronExpr, async () => {
     try {
       await runBackupJob();
-      updateHealthStats(new Date().toISOString());
+      onSyncComplete(new Date().toISOString());
     } catch (err: any) {
       console.error('❌ Scheduled backup job crashed:', err.message);
       // Never exit — keep scheduler alive for next cycle
@@ -39,7 +38,7 @@ export const initScheduler = (): void => {
   // Run immediately on startup for a full initial sync
   console.log('🚀 Running initial full sync on startup...');
   runBackupJob()
-    .then(() => updateHealthStats(new Date().toISOString()))
+    .then(() => onSyncComplete(new Date().toISOString()))
     .catch((err) => {
       console.error('❌ Initial sync failed:', err.message);
     });

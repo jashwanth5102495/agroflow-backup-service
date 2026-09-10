@@ -1,7 +1,19 @@
 import { env } from './config/env';
 import { connectDatabases } from './config/database';
 import { initScheduler } from './services/scheduler.service';
-import { startHealthServer } from './services/health.service';
+import { startDashboardServer } from './services/dashboard.service';
+
+// Shared state — scheduler updates these, dashboard reads them
+let lastSyncTime: string | null = null;
+let syncCount = 0;
+
+export const updateSyncStats = (time: string) => {
+  lastSyncTime = time;
+  syncCount++;
+};
+
+export const getLastSyncTime = () => lastSyncTime;
+export const getSyncCount = () => syncCount;
 
 const startBackupService = async (): Promise<void> => {
   console.log('');
@@ -17,11 +29,11 @@ const startBackupService = async (): Promise<void> => {
   // Step 1: Connect to both databases
   await connectDatabases();
 
-  // Step 2: Start the health check HTTP server (for Railway monitoring)
-  startHealthServer();
+  // Step 2: Start the Express dashboard server (login + stats UI + health)
+  startDashboardServer(getLastSyncTime, getSyncCount);
 
   // Step 3: Start the cron scheduler (also triggers first sync immediately)
-  initScheduler();
+  initScheduler(updateSyncStats);
 };
 
 startBackupService().catch((err: any) => {
@@ -40,12 +52,11 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
+// Keep alive — never crash on unhandled errors
 process.on('unhandledRejection', (err: any) => {
-  // Log but never crash — backup must keep running
   console.error('⚠️  Unhandled Rejection (service kept alive):', err?.message || err);
 });
 
 process.on('uncaughtException', (err: any) => {
-  // Log but never crash — backup must keep running
   console.error('⚠️  Uncaught Exception (service kept alive):', err?.message || err);
 });
