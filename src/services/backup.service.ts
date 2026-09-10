@@ -1,5 +1,5 @@
-import { getPrimaryConn, getBackupConn } from '../config/database';
 import mongoose from 'mongoose';
+import { getPrimaryConn, getBackupConn } from '../config/database';
 
 // ============================================================
 //  SAFETY CONTRACT — DO NOT MODIFY
@@ -8,7 +8,7 @@ import mongoose from 'mongoose';
 //  2. NO UPDATE/REPLACE operations are ever performed.
 //  3. ONLY $setOnInsert (upsert) is used — insert if not exists.
 //  4. The backup connection is NEVER passed to any other module.
-//  5. The primary connection is READ-ONLY from this service's perspective.
+//  5. The primary connection is READ-ONLY from this service.
 // ============================================================
 
 // Full list of all collections to mirror from primary to backup
@@ -35,10 +35,15 @@ interface SyncResult {
   error?: string;
 }
 
+// Track global stats across all runs
+let totalRunCount = 0;
+let totalRecordsSynced = 0;
+let lastSuccessfulSync: string | null = null;
+
 /**
  * Syncs a single collection from primary to backup.
- * SAFETY: Uses $setOnInsert so records that already exist
- * in the backup are NEVER touched or overwritten.
+ * SAFETY: Uses $setOnInsert so existing records in backup
+ * are NEVER touched or overwritten — ever.
  */
 const syncCollection = async (collectionName: string): Promise<SyncResult> => {
   const primary = getPrimaryConn();
@@ -52,7 +57,7 @@ const syncCollection = async (collectionName: string): Promise<SyncResult> => {
   };
 
   try {
-    // Read all documents from primary
+    // READ from primary
     const primaryCollection = primary.collection(collectionName);
     const documents = await primaryCollection.find({}).toArray();
     result.read = documents.length;
@@ -61,25 +66,35 @@ const syncCollection = async (collectionName: string): Promise<SyncResult> => {
       return result;
     }
 
-    // Write to backup using APPEND-ONLY bulk upsert
+    // WRITE to backup using APPEND-ONLY bulk upsert
     const backupCollection = backup.collection(collectionName);
-    const operations = documents.map((doc) => ({
-      updateOne: {
-        filter: { _id: doc._id },
-        update: {
-          // $setOnInsert: only runs if this is a NEW insert.
-          // If the document already exists, this entire block is IGNORED.
-          $setOnInsert: doc,
+
+    // Process in batches of 500 to avoid memory issues with large collections
+    const BATCH_SIZE = 500;
+    let totalInserted = 0;
+
+    for (let i = 0; i < documents.length; i += BATCH_SIZE) {
+      const batch = documents.slice(i, i + BATCH_SIZE);
+      const operations = batch.map((doc) => ({
+        updateOne: {
+          filter: { _id: doc._id },
+          update: {
+            // $setOnInsert: ONLY runs if this is a brand new insert.
+            // If document already exists → this block is COMPLETELY IGNORED.
+            $setOnInsert: doc,
+          },
+          upsert: true,
         },
-        upsert: true, // Insert if not found, but DO NOT update if found
-      },
-    }));
+      }));
 
-    const bulkResult = await backupCollection.bulkWrite(operations, {
-      ordered: false, // Continue even if some ops fail
-    });
+      const bulkResult = await backupCollection.bulkWrite(operations, {
+        ordered: false, // Continue even if individual ops fail
+      });
 
-    result.inserted = bulkResult.upsertedCount || 0;
+      totalInserted += bulkResult.upsertedCount || 0;
+    }
+
+    result.inserted = totalInserted;
     result.skipped = documents.length - result.inserted;
   } catch (err: any) {
     result.error = err.message;
@@ -90,29 +105,28 @@ const syncCollection = async (collectionName: string): Promise<SyncResult> => {
 };
 
 /**
- * Main backup job — runs all collection syncs sequentially.
- * Called by the cron scheduler.
+ * Main backup job — syncs all collections from primary to backup.
+ * Called by the cron scheduler every N hours.
  */
 export const runBackupJob = async (): Promise<void> => {
+  totalRunCount++;
   const startTime = Date.now();
   const timestamp = new Date().toISOString();
 
   console.log('\n');
   console.log('═══════════════════════════════════════════════');
-  console.log(`  🔄 AgroFlow Backup Job Started`);
+  console.log(`  🔄 AgroFlow Backup Job #${totalRunCount}`);
   console.log(`  📅 Time: ${timestamp}`);
   console.log('═══════════════════════════════════════════════');
 
-  const results: SyncResult[] = [];
   let totalRead = 0;
   let totalInserted = 0;
   let totalSkipped = 0;
   let hasErrors = false;
 
   for (const collection of COLLECTIONS_TO_SYNC) {
-    process.stdout.write(`  📦 Syncing [${collection}]... `);
+    process.stdout.write(`  📦 Syncing [${collection.padEnd(20)}] ... `);
     const result = await syncCollection(collection);
-    results.push(result);
 
     totalRead += result.read;
     totalInserted += result.inserted;
@@ -120,23 +134,30 @@ export const runBackupJob = async (): Promise<void> => {
 
     if (result.error) {
       hasErrors = true;
-      console.log(`❌ ERROR`);
+      console.log(`❌ ERROR: ${result.error}`);
     } else {
-      console.log(`✅ ${result.read} read, ${result.inserted} new, ${result.skipped} already safe`);
+      console.log(`✅ ${result.read} read | ${result.inserted} new | ${result.skipped} already safe`);
     }
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+  totalRecordsSynced += totalInserted;
+
+  if (!hasErrors) {
+    lastSuccessfulSync = timestamp;
+  }
 
   console.log('───────────────────────────────────────────────');
-  console.log(`  📊 Summary:`);
-  console.log(`     Total Records Read from Primary: ${totalRead}`);
-  console.log(`     New Records Inserted to Backup:  ${totalInserted}`);
-  console.log(`     Records Already Safe (Skipped):  ${totalSkipped}`);
-  console.log(`     Duration: ${duration}s`);
+  console.log(`  📊 Run #${totalRunCount} Summary:`);
+  console.log(`     Records Read from Primary DB : ${totalRead.toLocaleString()}`);
+  console.log(`     New Records Added to Backup  : ${totalInserted.toLocaleString()}`);
+  console.log(`     Already Safe (Skipped)        : ${totalSkipped.toLocaleString()}`);
+  console.log(`     Duration                      : ${duration}s`);
+  console.log(`     All-time records synced       : ${totalRecordsSynced.toLocaleString()}`);
+  console.log(`     Last successful sync          : ${lastSuccessfulSync || 'N/A'}`);
 
   if (hasErrors) {
-    console.log(`  ⚠️  Status: COMPLETED WITH SOME ERRORS (check logs above)`);
+    console.log(`  ⚠️  Status: COMPLETED WITH ERRORS — backup still partially safe`);
   } else {
     console.log(`  ✅ Status: ALL COLLECTIONS SYNCED SUCCESSFULLY`);
   }

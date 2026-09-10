@@ -1,19 +1,14 @@
-import cron from 'node-cron';
 import { env } from '../config/env';
 import { runBackupJob } from '../services/backup.service';
+import { updateHealthStats } from '../services/health.service';
+import cron from 'node-cron';
 
-/**
- * Converts BACKUP_INTERVAL_HOURS into a valid cron expression.
- * Examples:
- *   6  hours → "0 */6 * * *"  (every 6 hours)
- *   12 hours → "0 */12 * * *" (every 12 hours)
- *   1  hour  → "0 * * * *"    (every hour)
- */
 const buildCronExpression = (hours: number): string => {
   if (hours <= 0 || hours > 24) {
     console.warn(`⚠️  Invalid BACKUP_INTERVAL_HOURS (${hours}). Defaulting to 6 hours.`);
     return '0 */6 * * *';
   }
+  if (hours === 1) return '0 * * * *';
   return `0 */${hours} * * *`;
 };
 
@@ -21,25 +16,31 @@ export const initScheduler = (): void => {
   const intervalHours = env.BACKUP_INTERVAL_HOURS;
   const cronExpr = buildCronExpression(intervalHours);
 
+  const now = new Date();
+  const nextRun = new Date(now.getTime() + intervalHours * 60 * 60 * 1000);
+
   console.log(`⏰ Backup Scheduler initialized`);
-  console.log(`   Schedule: Every ${intervalHours} hours`);
-  console.log(`   Cron:     ${cronExpr}`);
-  console.log(`   Next run: in ~${intervalHours} hours`);
+  console.log(`   Interval : Every ${intervalHours} hours`);
+  console.log(`   Cron     : ${cronExpr}`);
+  console.log(`   Next auto: ${nextRun.toISOString()}`);
   console.log('');
 
   // Schedule the recurring backup job
   cron.schedule(cronExpr, async () => {
     try {
       await runBackupJob();
+      updateHealthStats(new Date().toISOString());
     } catch (err: any) {
-      console.error('❌ Backup job crashed unexpectedly:', err.message);
-      // Do NOT exit — keep the scheduler alive so next cycle still runs
+      console.error('❌ Scheduled backup job crashed:', err.message);
+      // Never exit — keep scheduler alive for next cycle
     }
   });
 
-  // Also run once immediately on startup to do an initial full sync
-  console.log('🚀 Running initial backup sync on startup...');
-  runBackupJob().catch((err) => {
-    console.error('❌ Initial sync failed:', err.message);
-  });
+  // Run immediately on startup for a full initial sync
+  console.log('🚀 Running initial full sync on startup...');
+  runBackupJob()
+    .then(() => updateHealthStats(new Date().toISOString()))
+    .catch((err) => {
+      console.error('❌ Initial sync failed:', err.message);
+    });
 };
