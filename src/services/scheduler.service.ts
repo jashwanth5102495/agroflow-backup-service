@@ -11,35 +11,20 @@ const buildCronExpression = (hours: number): string => {
   return `0 */${hours} * * *`;
 };
 
-export const initScheduler = (onSyncComplete: (time: string) => void): void => {
+export const initScheduler = (): void => {
   const intervalHours = env.BACKUP_INTERVAL_HOURS;
   const cronExpr = buildCronExpression(intervalHours);
 
-  const now = new Date();
-  const nextRun = new Date(now.getTime() + intervalHours * 60 * 60 * 1000);
+  console.log(`⏰ Backup Scheduler initialized — Every ${intervalHours} hours (${cronExpr})`);
 
-  console.log(`⏰ Backup Scheduler initialized`);
-  console.log(`   Interval : Every ${intervalHours} hours`);
-  console.log(`   Cron     : ${cronExpr}`);
-  console.log(`   Next auto: ${nextRun.toISOString()}`);
-  console.log('');
-
-  // Schedule the recurring backup job
   cron.schedule(cronExpr, async () => {
     try {
       await runBackupJob();
-      onSyncComplete(new Date().toISOString());
     } catch (err: any) {
-      console.error('❌ Scheduled backup job crashed:', err.message);
-      // Never exit — keep scheduler alive for next cycle
+      console.error('❌ Scheduled backup job crashed (scheduler stays alive):', err.message);
     }
   });
 
-  // Run immediately on startup for a full initial sync
   console.log('🚀 Running initial full sync on startup...');
-  runBackupJob()
-    .then(() => onSyncComplete(new Date().toISOString()))
-    .catch((err) => {
-      console.error('❌ Initial sync failed:', err.message);
-    });
+  runBackupJob().catch((err) => console.error('❌ Initial sync failed:', err.message));
 };

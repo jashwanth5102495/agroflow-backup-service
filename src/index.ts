@@ -2,18 +2,7 @@ import { env } from './config/env';
 import { connectDatabases } from './config/database';
 import { initScheduler } from './services/scheduler.service';
 import { startDashboardServer } from './services/dashboard.service';
-
-// Shared state — scheduler updates these, dashboard reads them
-let lastSyncTime: string | null = null;
-let syncCount = 0;
-
-export const updateSyncStats = (time: string) => {
-  lastSyncTime = time;
-  syncCount++;
-};
-
-export const getLastSyncTime = () => lastSyncTime;
-export const getSyncCount = () => syncCount;
+import { getLastSyncTime, getSyncCount } from './services/backup.service';
 
 const startBackupService = async (): Promise<void> => {
   console.log('');
@@ -34,7 +23,7 @@ const startBackupService = async (): Promise<void> => {
   await connectDatabases();
 
   // Step 3: Start the cron scheduler (also triggers first sync immediately)
-  initScheduler(updateSyncStats);
+  initScheduler();
 };
 
 startBackupService().catch((err: any) => {
